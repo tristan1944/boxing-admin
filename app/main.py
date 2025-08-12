@@ -28,6 +28,9 @@ from .routers import qr_stub as qr_router
 async def lifespan(app: FastAPI):
     # Initialize database schema on startup
     Base.metadata.create_all(bind=engine)
+    # Create foundational SQL views (idempotent)
+    from .sql_views import create_views
+    create_views(engine)
     yield
 
 
