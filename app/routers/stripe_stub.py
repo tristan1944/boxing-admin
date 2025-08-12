@@ -76,16 +76,20 @@ async def stripe_webhook(request: Request, db: Session = Depends(get_db)) -> dic
         event_type = (j.get("type") or "").strip()
         obj = (j.get("data") or {}).get("object") or {}
         if event_type.startswith("payment_intent."):
-            status = "succeeded" if event_type.endswith("succeeded") else (
-                "failed" if event_type.endswith("payment_failed") else "created"
-            )
+            # normalize additional variants
+            failed = event_type.endswith("payment_failed") or event_type.endswith("failed")
+            succeeded = event_type.endswith("succeeded")
+            status = "succeeded" if succeeded else ("failed" if failed else "created")
             _upsert_payment_from_intent(db, obj, status)
         elif event_type.startswith("charge."):
-            # charge.succeeded, charge.refunded
-            status = "succeeded" if event_type.endswith("succeeded") else "updated"
+            # charge.succeeded, charge.refunded, charge.dispute.created/lost/won → map to updated/failed
+            succeeded = event_type.endswith("succeeded")
+            refunded = event_type.endswith("refunded")
+            dispute = ".dispute." in event_type
+            status = "succeeded" if succeeded else ("updated" if (refunded or not dispute) else "failed")
             p = _upsert_payment_from_charge(db, obj, status)
             # handle refund events
-            if event_type.endswith("refunded"):
+            if refunded:
                 refunds = (obj.get("refunds") or {}).get("data") or []
                 if refunds:
                     r0 = refunds[0]
