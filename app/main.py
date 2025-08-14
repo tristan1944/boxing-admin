@@ -23,6 +23,9 @@ from .routers import stripe_stub as stripe_router
 from .routers import whatsapp_stub as whatsapp_router
 from .routers import qr_stub as qr_router
 
+# Ensure schema is present when the module is imported (helps tests using TestClient without lifespan)
+Base.metadata.create_all(bind=engine)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):

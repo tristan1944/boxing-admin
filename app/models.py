@@ -366,8 +366,6 @@ class MemberVisit(Base):
     meta_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     __table_args__ = (
-        Index("ix_member_visits_member", "member_id"),
-        Index("ix_member_visits_event", "event_id"),
         Index("ix_member_visits_ts", "ts"),
     )
 
@@ -390,6 +388,5 @@ class CodeEmbedding(Base):
 
     __table_args__ = (
         UniqueConstraint("path", "chunk_idx", "text_hash", name="uq_code_chunk"),
-        Index("ix_code_embeddings_path", "path"),
     )
 
