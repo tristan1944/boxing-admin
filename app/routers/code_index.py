@@ -57,10 +57,9 @@ def code_backfill(
     root_dir: Optional[str] = Query(default=None, description="Root directory to index; defaults to CWD"),
     exts: Optional[str] = Query(default=".py,.ts,.tsx,.js,.json,.md"),
     ignores: Optional[str] = Query(default=None, description="Comma-separated glob patterns to ignore"),
-    persist: bool = Query(default=False, description="Persist embeddings in DB (dev only)"),
+    persist: bool = False,
 ) -> dict:
-    # This route intentionally DOES NOT persist vectors to DB, avoiding clash with runtime app embeddings
-    # and Cursor's built-in code intelligence. It returns transient vectors so the caller can hold them in memory.
+    # Stateless by default; persistence is opt-in
     provider = get_embedding_provider()
     root = Path(root_dir or ".").resolve()
     include_exts = set((exts or "").split(","))
@@ -70,25 +69,42 @@ def code_backfill(
 
     texts: List[str] = []
     meta: List[dict] = []
+    seen_keys: set[tuple[str, int, str]] = set()
     for f in files:
         content = _read_file(f)
         if not content:
             continue
+        rel_path = str(f.relative_to(root))
+        text_hash = hashlib.sha256(content.encode()).hexdigest()
+        key = (rel_path, 0, text_hash)
+        if key in seen_keys:
+            continue
+        seen_keys.add(key)
         texts.append(content)
-        meta.append({"path": str(f.relative_to(root)), "sha256": hashlib.sha256(content.encode()).hexdigest()})
+        meta.append({"path": rel_path, "sha256": hashlib.sha256(content.encode()).hexdigest()})
 
     vectors = provider.embed_texts(texts) if texts else []
     if persist and vectors:
         db = SessionLocal()
         try:
+            # Preload existing keys to make inserts idempotent
+            existing = set(
+                db.query(CodeEmbedding.path, CodeEmbedding.chunk_idx, CodeEmbedding.text_hash).all()
+            )
             for m, vec, content in zip(meta, vectors, texts):
+                rel_path = m["path"]
+                chunk_idx = 0
+                text_hash = hashlib.sha256(content.encode()).hexdigest()
+                key = (rel_path, chunk_idx, text_hash)
+                if key in existing:
+                    continue
                 db.add(
                     CodeEmbedding(
-                        path=m["path"],
+                        path=rel_path,
                         file_sha256=m["sha256"],
-                        lang=Path(m["path"]).suffix.lstrip("."),
-                        chunk_idx=0,
-                        text_hash=hashlib.sha256(content.encode()).hexdigest(),
+                        lang=Path(rel_path).suffix.lstrip("."),
+                        chunk_idx=chunk_idx,
+                        text_hash=text_hash,
                         vector=vec,
                     )
                 )
@@ -125,7 +141,7 @@ def code_search(
         finally:
             db.close()
     # Stateless fallback
-    backfill = code_backfill(root_dir=root_dir, exts=exts, ignores=ignores)
+    backfill = code_backfill(root_dir=root_dir, exts=exts, ignores=ignores, persist=False)
     scored = []
     for meta, vec in zip(backfill["meta"], backfill["vectors"]):
         score = cosine_similarity(q_vec, vec)
